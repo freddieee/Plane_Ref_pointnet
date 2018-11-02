@@ -14,8 +14,8 @@ import torch.utils.data
 # import torchvision.utils as vutils
 from torch.autograd import Variable
 from datasets import PartDataset
-from pointnet import PointNetDenseCls
-from pointnet_Ref import PointNetRef3d_for_DenseCls
+# from pointnet import PointNetDenseCls
+from pointnet_plane_multi import PointNetDenseCls
 import torch.nn.functional as F
 
 def func_miou(num_classes,target,pred_choice):
@@ -33,19 +33,19 @@ def func_miou(num_classes,target,pred_choice):
     return part_ious
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--batchSize', type=int, default=4, help='input batch size')
-parser.add_argument('--num_points', type=int, default=2500, help='input batch size')
-parser.add_argument('--workers', type=int, help='number of data loading workers', default=0)
-parser.add_argument('--nepoch', type=int, default=25, help='number of epochs to train for')
-parser.add_argument('--outf', type=str, default='cls',  help='output folder')
+parser.add_argument('--batchSize', type=int, default=16, help='input batch size')
+parser.add_argument('--num_points', type=int, default=2048, help='input batch size')
+parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
+parser.add_argument('--nepoch', type=int, default=200, help='number of epochs to train for')
+parser.add_argument('--outf', type=str, default='./seg/planeMuti',  help='output folder')
 parser.add_argument('--model', type=str, default = '',  help='model path')
-parser.add_argument('--n_views', type=int, default = 13,  help='view numbers')
-parser.add_argument('--lr', type=float, default = 0.01,  help='learning rate')
+parser.add_argument('--n_views', type=int, default = 6,  help='view numbers')
+parser.add_argument('--lr', type=float, default = 0.001,  help='learning rate')
 parser.add_argument('--momentum', type=float, default = 0.9,  help='momentum')
 parser.add_argument('--classType', type=str, default = 'Bag',  help='class')
-
-
+parser.add_argument('--devices',type=list,default=[0],help='multiple devices supported')
 opt = parser.parse_args()
+opt.devices=[int(i) for i in opt.devices]
 print (opt)
 
 opt.manualSeed = random.randint(1, 10000) # fix seed
@@ -73,11 +73,16 @@ except OSError:
 blue = lambda x:'\033[94m' + x + '\033[0m'
 
 
-classifier = PointNetRef3d_for_DenseCls(k = num_classes,views=opt.n_views)
+
+classifier = PointNetDenseCls(k = num_classes,views=opt.n_views)
 
 if opt.model != '':
     print("Finish Loading")
     classifier.load_state_dict(torch.load(opt.model))
+    
+classifier=torch.nn.DataParallel(classifier, device_ids=opt.devices)
+cudnn.benchmark=True
+
 
 optimizer = optim.SGD(classifier.parameters(), lr=opt.lr, momentum=opt.momentum)
 classifier.cuda()
@@ -123,6 +128,10 @@ for epoch in range(opt.nepoch):
             iou=sum(ioumax)/len(ioumax)
             miou_list.append(iou)
             miou=np.mean(miou_list)
-            print('[%d: %d/%d] %s loss: %f accuracy: %f IOU: %f mIOU %f' %(epoch, i, num_batch, blue('test'), loss.item(), correct.item()/float(opt.batchSize*opt.num_points),iou,miou))
+            a=('PLANE-MULTI [%d: %d/%d] %s loss: %f accuracy: %f IOU: %f mIOU %f \n' %(epoch, i, num_batch, blue('test'), loss.item(), correct.item()/float(opt.batchSize*opt.num_points),iou,miou))
+            f = open(opt.outf+"/log.txt", "a")
+            f.write(a)
+            f.close
+            print(a)
     
-    torch.save(classifier.state_dict(), '%s/seg_model_%d.pth' % (opt.outf, epoch))
+    torch.save(classifier.module.state_dict(), '%s/seg_model_%d.pth' % (opt.outf, epoch))
